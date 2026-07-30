@@ -1,0 +1,39 @@
+name: test
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  # The action must PASS on a well-formed manifest.
+  good:
+    name: self-test
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - uses: ./
+        with:
+          paths: test/fixtures/good
+
+  # ...and must FAIL on the mis-nested one. A linter that never fails is theatre, so
+  # invert the result: the job passes only if the action actually rejected it.
+  bad:
+    name: self-test (must reject)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v7
+      - id: run
+        continue-on-error: true
+        uses: ./
+        with:
+          paths: test/fixtures/bad
+      - name: Assert the bad fixture was rejected
+        run: |
+          set -euo pipefail
+          if [ "${{ steps.run.outcome }}" = "failure" ]; then
+            echo "✓ action correctly rejected the mis-nested appset"
+          else
+            echo "::error::action PASSED a mis-nested appset — validation is not working"; exit 1
+          fi

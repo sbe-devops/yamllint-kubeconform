@@ -1,0 +1,25 @@
+# `elements` is a SIBLING of `list` instead of nested under it -> empty generator.
+# kubeconform must reject this.
+apiVersion: argoproj.io/v1alpha1
+kind: ApplicationSet
+metadata:
+  name: bad-example
+  namespace: argocd
+spec:
+  generators:
+    - list:
+      elements:
+        - cluster: te-non-sbe
+          app: bad-example
+  template:
+    metadata:
+      name: '{{app}}-{{cluster}}'
+    spec:
+      project: default
+      source:
+        repoURL: https://github.com/example/gitops.git
+        targetRevision: HEAD
+        path: '{{app}}/{{cluster}}'
+      destination:
+        name: '{{cluster}}'
+        namespace: default

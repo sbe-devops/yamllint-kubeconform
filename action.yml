@@ -1,0 +1,123 @@
+name: yamllint-kubeconform
+description: >-
+  Lint YAML (yamllint) and schema-validate Kubernetes manifests (kubeconform) in one
+  step. Public + generic on purpose: usable from any org, including engagement orgs that
+  cannot consume SBE's private reusables.
+
+inputs:
+  paths:
+    description: Space-separated files/dirs to check (e.g. "project/ appsets/").
+    required: true
+  lint:
+    description: Run yamllint ("true"/"false").
+    required: false
+    default: "true"
+  validate:
+    description: Run kubeconform ("true"/"false").
+    required: false
+    default: "true"
+  yamllint_config:
+    description: >-
+      Path to a yamllint config. Defaults to the bundled config (block style enforced —
+      inline flow mappings forbidden — so mis-nested keys are scannable).
+    required: false
+    default: ""
+  exclude:
+    description: >-
+      Space-separated basename globs to skip during VALIDATION (still linted), for
+      scaffolds with placeholders, e.g. "_template.yaml".
+    required: false
+    default: ""
+  kubeconform_version:
+    description: kubeconform release to pin.
+    required: false
+    default: v0.8.0
+  schema_locations:
+    description: >-
+      Space-separated kubeconform -schema-location values. Defaults to the built-in
+      schemas plus the CRDs-catalog, so CRs (ApplicationSet, ExternalSecret, Certificate…)
+      are validated instead of skipped.
+    required: false
+    default: >-
+      default
+      https://raw.githubusercontent.com/datreeio/CRDs-catalog/main/{{.Group}}/{{.ResourceKind}}_{{.ResourceAPIVersion}}.json
+  kubeconform_flags:
+    description: Extra kubeconform flags, appended to "-summary".
+    required: false
+    default: "-strict"
+
+runs:
+  using: composite
+  steps:
+    - name: yamllint
+      if: inputs.lint == 'true'
+      shell: bash
+      env:
+        PATHS: ${{ inputs.paths }}
+        CONFIG: ${{ inputs.yamllint_config }}
+      run: |
+        set -euo pipefail
+        # yamllint ships preinstalled on ubuntu runners.
+        command -v yamllint >/dev/null || { echo "::error::yamllint not found on runner"; exit 1; }
+        cfg="${CONFIG:-${GITHUB_ACTION_PATH}/default-yamllint.yml}"
+        echo "yamllint (config: ${cfg})"
+        yamllint -c "$cfg" $PATHS
+
+    - name: Install kubeconform
+      if: inputs.validate == 'true'
+      shell: bash
+      env:
+        KUBECONFORM_VERSION: ${{ inputs.kubeconform_version }}
+      run: |
+        set -euo pipefail
+        case "$(uname -m)" in
+          aarch64|arm64) arch=arm64 ;;
+          *)             arch=amd64 ;;
+        esac
+        curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-${arch}.tar.gz" -o /tmp/kubeconform.tgz
+        tar -xzf /tmp/kubeconform.tgz -C /tmp kubeconform
+        sudo install -m 0755 /tmp/kubeconform /usr/local/bin/kubeconform
+        kubeconform -v
+
+    - name: kubeconform
+      if: inputs.validate == 'true'
+      shell: bash
+      env:
+        PATHS: ${{ inputs.paths }}
+        EXCLUDE: ${{ inputs.exclude }}
+        SCHEMA_LOCATIONS: ${{ inputs.schema_locations }}
+        EXTRA_FLAGS: ${{ inputs.kubeconform_flags }}
+      run: |
+        set -euo pipefail
+
+        # Expand paths -> a file list so excludes can be applied (kubeconform has no
+        # exclude flag). Scaffolds/templates carry placeholders and aren't real resources.
+        files=()
+        while IFS= read -r f; do files+=("$f"); done < <(
+          for p in $PATHS; do
+            if [ -d "$p" ]; then find "$p" -type f \( -name '*.yaml' -o -name '*.yml' \)
+            elif [ -f "$p" ]; then echo "$p"
+            else echo "::error::path not found: $p" >&2; exit 1
+            fi
+          done | sort -u
+        )
+
+        if [ -n "$EXCLUDE" ]; then
+          kept=()
+          for f in "${files[@]}"; do
+            skip=false
+            for pat in $EXCLUDE; do
+              case "$(basename "$f")" in $pat) skip=true ;; esac
+            done
+            [ "$skip" = true ] && echo "skipping (excluded): $f" || kept+=("$f")
+          done
+          files=("${kept[@]}")
+        fi
+
+        [ ${#files[@]} -gt 0 ] || { echo "::error::no YAML files to validate"; exit 1; }
+
+        loc_args=()
+        for l in $SCHEMA_LOCATIONS; do loc_args+=(-schema-location "$l"); done
+
+        echo "kubeconform: ${#files[@]} file(s)"
+        kubeconform -summary "${loc_args[@]}" $EXTRA_FLAGS "${files[@]}"
