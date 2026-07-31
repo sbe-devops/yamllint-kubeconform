@@ -29,9 +29,9 @@ inputs:
     required: false
     default: ""
   kubeconform_version:
-    description: kubeconform release to pin.
+    description: kubeconform release to pin (no leading "v").
     required: false
-    default: v0.8.0
+    default: "0.8.0"
   schema_locations:
     description: >-
       Space-separated kubeconform -schema-location values. Defaults to the built-in
@@ -63,21 +63,15 @@ runs:
         echo "yamllint (config: ${cfg})"
         yamllint -c "$cfg" $PATHS
 
-    - name: Install kubeconform
+    # kubeconform is installed by sbe-devops/gh-setup-kubeconform, which verifies the
+    # download against the project's published checksums and fails closed. This replaced an
+    # inline `curl` that was duplicated here and in helm-kustomize — one install, one place
+    # to audit (standards/github-actions.md, "Installing tools in workflows").
+    - name: Set up kubeconform
       if: inputs.validate == 'true'
-      shell: bash
-      env:
-        KUBECONFORM_VERSION: ${{ inputs.kubeconform_version }}
-      run: |
-        set -euo pipefail
-        case "$(uname -m)" in
-          aarch64|arm64) arch=arm64 ;;
-          *)             arch=amd64 ;;
-        esac
-        curl -fsSL "https://github.com/yannh/kubeconform/releases/download/${KUBECONFORM_VERSION}/kubeconform-linux-${arch}.tar.gz" -o /tmp/kubeconform.tgz
-        tar -xzf /tmp/kubeconform.tgz -C /tmp kubeconform
-        sudo install -m 0755 /tmp/kubeconform /usr/local/bin/kubeconform
-        kubeconform -v
+      uses: sbe-devops/gh-setup-kubeconform@v0.1.0
+      with:
+        version: ${{ inputs.kubeconform_version }}
 
     - name: kubeconform
       if: inputs.validate == 'true'
